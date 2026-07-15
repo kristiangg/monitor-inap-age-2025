@@ -1,24 +1,23 @@
 # Monitor INAP — Administrativo AGE 2025
 
-Vigila la página oficial del proceso selectivo y avisa por Telegram cuando aparece una publicación relevante nueva o cambia el título de una existente.
+Vigila la página oficial de la convocatoria y avisa por Telegram.
 
 ## Funciones
 
-- Revisión automática cada 5 minutos (GitHub puede demorarse puntualmente).
-- Filtrado de resoluciones, notas, listados, plantillas, cuestionarios, fechas y PDFs.
-- Botón directo para abrir cada publicación.
-- Adjunta automáticamente los PDFs en Telegram cuando la API lo permite; si falla, envía el enlace.
-- Guarda un historial en `history.json`.
-- Usa `ETag` y `Last-Modified` cuando el servidor los ofrece, evitando procesar una página sin cambios.
-- Ignora menús, redes sociales y cambios de navegación.
+- Revisión automática mediante GitHub Actions.
+- Clasificación del aviso: resolución, nota, plantilla, listado, cuestionario, etc.
+- Botón **🌐 Ver en INAP**.
+- Envío del PDF directamente cuando Telegram puede descargarlo.
+- Detección de PDFs sustituidos aunque mantengan la misma URL, mediante SHA-256.
+- Segunda comprobación 30 segundos después para evitar avisos por publicaciones incompletas.
+- Protección frente a avisos duplicados.
+- Historial en `history.json` y estado en `state.json`.
 
-## Secretos necesarios
-
-En **Settings → Secrets and variables → Actions**:
+## Secretos requeridos
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-## Ejecución manual
+## Nota sobre GitHub Actions
 
-Ve a **Actions → Vigilar novedades INAP → Run workflow**.
+El texto `Vigilar novedades INAP #3` indica el número de ejecución del workflow. No significa que haya tres monitores funcionando a la vez.
