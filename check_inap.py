@@ -351,11 +351,20 @@ def main() -> int:
     send_test = os.getenv("SEND_TEST", "false").lower() == "true"
 
     if send_test:
-        send_telegram(
-            "✅ Prueba correcta\n\n"
-            "El monitor enviará aquí las próximas novedades del INAP."
-        )
+        for chat_id in telegram_chat_ids():
+            telegram_request(
+                "sendMessage",
+                telegram_base(chat_id) | {
+                    "text": (
+                        "✅ <b>Prueba correcta</b>\n\n"
+                        "El monitor enviará aquí las próximas novedades del INAP."
+                    ),
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                },
+            )
         return 0
+
     previous_state = load_state()
     current, cache_headers, not_modified = fetch_items(previous_state)
 
