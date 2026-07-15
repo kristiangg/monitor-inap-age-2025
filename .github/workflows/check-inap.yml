@@ -5,6 +5,12 @@ on:
     # Intervalo mínimo admitido por GitHub Actions. Puede haber retrasos puntuales.
     - cron: "2/5 * * * *"
   workflow_dispatch:
+  inputs:
+    send_test:
+      description: "Enviar mensaje de prueba a Telegram"
+      required: false
+      default: false
+      type: boolean
 
 permissions:
   contents: write
@@ -35,6 +41,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
+          SEND_TEST: ${{ inputs.send_test || 'false' }}
         run: python check_inap.py
 
       - name: Guardar estado, historial y PDFs nuevos
