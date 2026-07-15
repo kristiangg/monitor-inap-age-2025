@@ -2,7 +2,7 @@ name: Vigilar novedades INAP
 
 on:
   schedule:
-    # Cada 5 minutos. GitHub puede demorarlo algunos minutos en momentos de carga.
+    # Intervalo mínimo admitido por GitHub Actions. Puede haber retrasos puntuales.
     - cron: "2/5 * * * *"
   workflow_dispatch:
 
@@ -19,16 +19,16 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Descargar repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Preparar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
 
       - name: Instalar dependencias
-        run: pip install -r requirements.txt
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
 
       - name: Comprobar página y avisar
         env:
@@ -36,14 +36,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python check_inap.py
 
-      - name: Guardar nuevo estado
+      - name: Guardar estado e historial
         run: |
-          if git diff --quiet -- state.json; then
+          if git diff --quiet -- state.json history.json; then
             echo "No hay cambios de estado que guardar."
             exit 0
           fi
           git config user.name "inap-monitor-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json
+          git add state.json history.json
           git commit -m "Actualizar estado del monitor INAP"
           git push
