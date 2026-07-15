@@ -348,6 +348,14 @@ def detect_page_changes(previous: dict[str, dict], current: dict[str, dict]) -> 
 
 
 def main() -> int:
+    send_test = os.getenv("SEND_TEST", "false").lower() == "true"
+
+    if send_test:
+        send_telegram(
+            "✅ Prueba correcta\n\n"
+            "El monitor enviará aquí las próximas novedades del INAP."
+        )
+        return 0
     previous_state = load_state()
     current, cache_headers, not_modified = fetch_items(previous_state)
 
