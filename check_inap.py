@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 PAGE_URL = "https://sede.inap.gob.es/es/procedimientos-y-servicios/seleccion/procesos-selectivos-de-cuerpos-y-escalas-generales/cuerpo-general-administrativo-de-la-administracion-del-estado-ingreso-libre-convocatoria-2025"
 STATE_FILE = Path("state.json")
 HISTORY_FILE = Path("history.json")
+PDF_DIR = Path("pdfs")
 TIMEOUT = 45
 CONFIRM_DELAY_SECONDS = 30
 
@@ -173,10 +174,18 @@ def telegram_request(method: str, payload: dict) -> dict:
     return data
 
 
-def telegram_base() -> dict:
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    if not chat_id:
-        raise RuntimeError("Falta TELEGRAM_CHAT_ID en GitHub Secrets.")
+def telegram_chat_ids() -> list[str]:
+    raw = (
+        os.environ.get("TELEGRAM_CHAT_IDS", "").strip()
+        or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    )
+    chat_ids = [value.strip() for value in raw.split(",") if value.strip()]
+    if not chat_ids:
+        raise RuntimeError("Falta TELEGRAM_CHAT_ID o TELEGRAM_CHAT_IDS en GitHub Secrets.")
+    return chat_ids
+
+
+def telegram_base(chat_id: str) -> dict:
     return {"chat_id": chat_id}
 
 
@@ -184,7 +193,7 @@ def inline_keyboard(url: str) -> dict:
     return {"inline_keyboard": [[{"text": "🌐 Ver en INAP", "url": url}]]}
 
 
-def send_item(item: dict, event_type: str, old_title: str | None = None) -> None:
+def send_item_to_chat(chat_id: str, item: dict, event_type: str, old_title: str | None = None) -> None:
     title = html.escape(item["title"])
     url = item["url"]
     kind = html.escape(item.get("kind", "Publicación"))
@@ -202,7 +211,7 @@ def send_item(item: dict, event_type: str, old_title: str | None = None) -> None
         if old_title:
             detail += f"\n\n<b>Título anterior:</b> {html.escape(old_title)}"
 
-    payload = telegram_base() | {
+    payload = telegram_base(chat_id) | {
         "parse_mode": "HTML",
         "reply_markup": inline_keyboard(url),
     }
@@ -223,17 +232,50 @@ def send_item(item: dict, event_type: str, old_title: str | None = None) -> None
     })
 
 
+def send_item(item: dict, event_type: str, old_title: str | None = None) -> None:
+    for chat_id in telegram_chat_ids():
+        send_item_to_chat(chat_id, item, event_type, old_title=old_title)
+
+
+def safe_filename(value: str, limit: int = 90) -> str:
+    allowed = []
+    for char in value:
+        if char.isalnum() or char in ("-", "_", " "):
+            allowed.append(char)
+    name = "_".join("".join(allowed).split())[:limit].strip("_")
+    return name or "documento"
+
+
+def archive_pdf(item: dict) -> str | None:
+    if not item.get("pdf"):
+        return None
+    PDF_DIR.mkdir(exist_ok=True)
+    suffix = item.get("sha256", "")[:12] or item_id(item["url"])
+    filename = f"{safe_filename(item.get('title', 'documento'))}_{suffix}.pdf"
+    path = PDF_DIR / filename
+    if path.exists():
+        return str(path)
+    with SESSION.get(item["url"], timeout=TIMEOUT, stream=True) as response:
+        response.raise_for_status()
+        with path.open("wb") as fh:
+            for chunk in response.iter_content(chunk_size=1024 * 128):
+                if chunk:
+                    fh.write(chunk)
+    return str(path)
+
+
 def send_activation(count: int) -> None:
-    telegram_request("sendMessage", telegram_base() | {
-        "text": (
-            "✅ <b>Monitor INAP activado</b>\n\n"
-            f"Se han guardado {count} publicaciones relevantes como punto inicial. "
-            "Desde ahora recibirás avisos con el tipo de publicación, enlace directo y, cuando sea posible, el PDF adjunto."
-        ),
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-        "reply_markup": inline_keyboard(PAGE_URL),
-    })
+    for chat_id in telegram_chat_ids():
+        telegram_request("sendMessage", telegram_base(chat_id) | {
+            "text": (
+                "✅ <b>Monitor INAP activado</b>\n\n"
+                f"Se han guardado {count} publicaciones relevantes como punto inicial. "
+                "Desde ahora recibirás avisos con el tipo de publicación, enlace directo y, cuando sea posible, el PDF adjunto."
+            ),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": inline_keyboard(PAGE_URL),
+        })
 
 
 def load_state() -> dict | None:
@@ -311,9 +353,8 @@ def main() -> int:
 
     if previous_state is None:
         save_state(current, cache_headers, [])
-        append_history([{"type": "activated", "at": now_iso(), "count": len(current), "page": PAGE_URL}])
-        send_activation(len(current))
-        print(f"Estado inicial creado con {len(current)} publicaciones relevantes.")
+        append_history([{"type": "initialized", "at": now_iso(), "count": len(current), "page": PAGE_URL}])
+        print(f"Estado inicial creado silenciosamente con {len(current)} publicaciones relevantes.")
         return 0
 
     previous = previous_state.get("items", {})
@@ -380,12 +421,19 @@ def main() -> int:
             print(f"Aviso duplicado omitido: {event_type} {url}")
             continue
         send_item(item, event_type, old_title=old_title)
+        archived_pdf = None
+        if item.get("pdf"):
+            try:
+                archived_pdf = archive_pdf(item)
+            except Exception as exc:
+                print(f"No se pudo archivar el PDF {url}: {exc}", file=sys.stderr)
         notified.append(key)
         notified_set.add(key)
         events.append({
             "type": event_type,
             "at": now_iso(),
             "old_title": old_title,
+            "archived_pdf": archived_pdf,
             **item,
         })
 

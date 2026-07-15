@@ -34,16 +34,17 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_CHAT_IDS: ${{ secrets.TELEGRAM_CHAT_IDS }}
         run: python check_inap.py
 
-      - name: Guardar estado e historial
+      - name: Guardar estado, historial y PDFs nuevos
         run: |
-          if git diff --quiet -- state.json history.json; then
+          git add state.json history.json pdfs/ 2>/dev/null || true
+          if git diff --cached --quiet; then
             echo "No hay cambios de estado que guardar."
             exit 0
           fi
           git config user.name "inap-monitor-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json history.json
           git commit -m "Actualizar estado del monitor INAP"
           git push
