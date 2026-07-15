@@ -2,15 +2,14 @@ name: Vigilar novedades INAP
 
 on:
   schedule:
-    # Intervalo mínimo admitido por GitHub Actions. Puede haber retrasos puntuales.
     - cron: "2/5 * * * *"
   workflow_dispatch:
-  inputs:
-    send_test:
-      description: "Enviar mensaje de prueba a Telegram"
-      required: false
-      default: false
-      type: boolean
+    inputs:
+      send_test:
+        description: "Enviar mensaje de prueba a Telegram"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
