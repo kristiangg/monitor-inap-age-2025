@@ -21,7 +21,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - name: Descargar repositorio
         uses: actions/checkout@v5
@@ -44,6 +44,7 @@ jobs:
         run: python check_inap.py
 
       - name: Guardar estado, historial y PDFs nuevos
+        if: ${{ inputs.send_test != true }}
         run: |
           git add state.json history.json pdfs/ 2>/dev/null || true
           if git diff --cached --quiet; then

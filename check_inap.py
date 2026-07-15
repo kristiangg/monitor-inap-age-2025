@@ -17,6 +17,14 @@ HISTORY_FILE = Path("history.json")
 PDF_DIR = Path("pdfs")
 TIMEOUT = 45
 CONFIRM_DELAY_SECONDS = 30
+WEEKLY_DAYS = 7
+
+IMPORTANT_WORDS = (
+    "calificaciones", "calificación", "calificacion", "aprobados", "aprobado",
+    "plantilla definitiva", "plantilla", "fecha de examen", "fecha", "llamamiento",
+    "nombramiento", "destino", "relación definitiva", "relacion definitiva",
+    "admitidos", "excluidos", "resultados", "convocados",
+)
 
 RELEVANT_WORDS = (
     "resolución", "resolucion", "nota", "informativa", "listado", "lista",
@@ -189,46 +197,69 @@ def telegram_base(chat_id: str) -> dict:
     return {"chat_id": chat_id}
 
 
-def inline_keyboard(url: str) -> dict:
-    return {"inline_keyboard": [[{"text": "🌐 Ver en INAP", "url": url}]]}
+def inline_keyboard(url: str, pdf_url: str | None = None) -> dict:
+    buttons = [{"text": "🌐 Ver en INAP", "url": url}]
+    if pdf_url:
+        buttons.append({"text": "📄 Abrir PDF", "url": pdf_url})
+    return {"inline_keyboard": [buttons]}
+
+
+def is_important(item: dict) -> bool:
+    text = f"{item.get('title', '')} {item.get('kind', '')}".lower()
+    return any(word in text for word in IMPORTANT_WORDS)
+
+
+def event_visual(event_type: str) -> tuple[str, str]:
+    mapping = {
+        "new": ("🟢", "Nueva publicación"),
+        "updated": ("🟡", "Título actualizado"),
+        "pdf_added": ("🔵", "PDF añadido"),
+        "pdf_changed": ("🟠", "PDF modificado"),
+        "removed": ("🔴", "Publicación retirada"),
+    }
+    return mapping.get(event_type, ("🔔", "Actualización"))
 
 
 def send_item_to_chat(chat_id: str, item: dict, event_type: str, old_title: str | None = None) -> None:
-    title = html.escape(item["title"])
+    title = html.escape(item.get("title", "Sin título"))
     url = item["url"]
     kind = html.escape(item.get("kind", "Publicación"))
-    emoji = item.get("emoji", "🔔")
+    kind_emoji = item.get("emoji", "🔔")
+    event_emoji, event_label = event_visual(event_type)
+    priority = "🚨🚨 <b>IMPORTANTE</b> 🚨🚨\n\n" if is_important(item) else ""
+    detected = datetime.now().astimezone().strftime("%d/%m/%Y · %H:%M")
 
-    if event_type == "new":
-        heading = "🚨 <b>Nueva publicación en INAP</b>"
-        detail = f"{emoji} <b>{kind}</b>\n\n{title}"
+    lines = [
+        f"{priority}{event_emoji} <b>{event_label.upper()}</b>",
+        "",
+        f"📌 <b>Tipo:</b> {kind_emoji} {kind}",
+        f"📝 <b>Título:</b> {title}",
+        f"📅 <b>Detectado:</b> {detected}",
+    ]
+
+    if event_type == "updated" and old_title:
+        lines.extend(["", f"↩️ <b>Título anterior:</b> {html.escape(old_title)}"])
     elif event_type == "pdf_changed":
-        heading = "♻️ <b>Documento actualizado en INAP</b>"
-        detail = f"{emoji} <b>{kind}</b>\n\n{title}\n\nEl PDF ha cambiado aunque conserva el mismo enlace."
-    else:
-        heading = "✏️ <b>Publicación actualizada en INAP</b>"
-        detail = f"{emoji} <b>{kind}</b>\n\n{title}"
-        if old_title:
-            detail += f"\n\n<b>Título anterior:</b> {html.escape(old_title)}"
+        lines.extend(["", "El contenido del PDF ha cambiado aunque conserva el mismo enlace."])
+    elif event_type == "removed":
+        lines.extend(["", "La publicación ya no aparece en la página oficial."])
 
-    payload = telegram_base(chat_id) | {
-        "parse_mode": "HTML",
-        "reply_markup": inline_keyboard(url),
-    }
+    lines.extend(["", "📎 <b>PDF adjunto</b>" if item.get("pdf") else "📎 Sin PDF directo"])
+    text = "\n".join(lines)
+    keyboard = inline_keyboard(url, url if item.get("pdf") else None)
+    payload = telegram_base(chat_id) | {"parse_mode": "HTML", "reply_markup": keyboard}
 
-    if item.get("pdf"):
+    if item.get("pdf") and event_type != "removed":
         try:
-            telegram_request("sendDocument", payload | {
-                "document": url,
-                "caption": f"{heading}\n\n{detail}"[:1024],
-            })
+            telegram_request("sendDocument", payload | {"document": url, "caption": text[:1024]})
             return
         except Exception as exc:
             print(f"No se pudo adjuntar el PDF; se enviará como enlace: {exc}", file=sys.stderr)
 
     telegram_request("sendMessage", payload | {
-        "text": f"{heading}\n\n{detail}",
+        "text": text,
         "disable_web_page_preview": True,
+        "disable_notification": False,
     })
 
 
@@ -338,31 +369,74 @@ def event_key(event_type: str, item: dict, extra: str = "") -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def detect_page_changes(previous: dict[str, dict], current: dict[str, dict]) -> tuple[list[str], list[str]]:
+def detect_page_changes(previous: dict[str, dict], current: dict[str, dict]) -> tuple[list[str], list[str], list[str], list[str]]:
     new_urls = [url for url in current if url not in previous]
     changed_urls = [
         url for url in current
         if url in previous and current[url]["title"] != previous[url].get("title", "")
     ]
-    return new_urls, changed_urls
+    pdf_added_urls = [
+        url for url in current
+        if url in previous and current[url].get("pdf") and not previous[url].get("pdf")
+    ]
+    removed_urls = [url for url in previous if url not in current]
+    return new_urls, changed_urls, pdf_added_urls, removed_urls
+
+
+def send_test_message() -> None:
+    for chat_id in telegram_chat_ids():
+        telegram_request("sendMessage", telegram_base(chat_id) | {
+            "text": "✅ <b>Prueba correcta</b>\n\nEl monitor enviará aquí las próximas novedades del INAP.",
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        })
+
+
+def send_weekly_summary() -> None:
+    cutoff = datetime.now(timezone.utc).timestamp() - WEEKLY_DAYS * 86400
+    history: list[dict] = []
+    if HISTORY_FILE.exists():
+        try:
+            history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            history = []
+    recent = []
+    for event in history:
+        try:
+            ts = datetime.fromisoformat(event.get("at", "")).timestamp()
+        except (ValueError, TypeError):
+            continue
+        if ts >= cutoff and event.get("type") != "initialized":
+            recent.append(event)
+
+    lines = ["📊 <b>Resumen semanal INAP</b>", ""]
+    if not recent:
+        lines.append("No se han detectado novedades durante los últimos 7 días.")
+    else:
+        lines.append(f"Se han detectado <b>{len(recent)}</b> cambios:")
+        lines.append("")
+        for event in recent[-20:]:
+            emoji, label = event_visual(event.get("type", ""))
+            title = html.escape(event.get("title", "Sin título"))
+            lines.append(f"{emoji} <b>{label}:</b> {title}")
+        if len(recent) > 20:
+            lines.append(f"\n…y {len(recent) - 20} cambios más.")
+
+    for chat_id in telegram_chat_ids():
+        telegram_request("sendMessage", telegram_base(chat_id) | {
+            "text": "\n".join(lines),
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+            "reply_markup": inline_keyboard(PAGE_URL),
+        })
 
 
 def main() -> int:
-    send_test = os.getenv("SEND_TEST", "false").lower() == "true"
-
-    if send_test:
-        for chat_id in telegram_chat_ids():
-            telegram_request(
-                "sendMessage",
-                telegram_base(chat_id) | {
-                    "text": (
-                        "✅ <b>Prueba correcta</b>\n\n"
-                        "El monitor enviará aquí las próximas novedades del INAP."
-                    ),
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                },
-            )
+    if os.getenv("SEND_TEST", "false").lower() == "true":
+        send_test_message()
+        return 0
+    if os.getenv("WEEKLY_SUMMARY", "false").lower() == "true":
+        send_weekly_summary()
         return 0
 
     previous_state = load_state()
@@ -378,14 +452,14 @@ def main() -> int:
     notified = list(previous_state.get("notified_events", []))
     notified_set = set(notified)
 
-    new_urls, changed_urls = detect_page_changes(previous, current)
+    new_urls, changed_urls, pdf_added_urls, removed_urls = detect_page_changes(previous, current)
 
     # Si hay una novedad visible en la página, la confirmamos 30 segundos después.
-    if new_urls or changed_urls:
+    if new_urls or changed_urls or pdf_added_urls or removed_urls:
         print(f"Cambio candidato detectado; esperando {CONFIRM_DELAY_SECONDS}s para confirmarlo.")
         time.sleep(CONFIRM_DELAY_SECONDS)
         confirmed, confirmed_headers, _ = fetch_items(previous_state, use_cache=False)
-        new_urls, changed_urls = detect_page_changes(previous, confirmed)
+        new_urls, changed_urls, pdf_added_urls, removed_urls = detect_page_changes(previous, confirmed)
         current = confirmed
         cache_headers = confirmed_headers
 
@@ -428,10 +502,12 @@ def main() -> int:
     candidates: list[tuple[str, str, str | None]] = []
     candidates.extend(("new", url, None) for url in new_urls)
     candidates.extend(("updated", url, previous[url].get("title", "")) for url in changed_urls)
+    candidates.extend(("pdf_added", url, None) for url in pdf_added_urls if url not in new_urls)
     candidates.extend(("pdf_changed", url, None) for url in pdf_changed_urls if url not in new_urls)
+    candidates.extend(("removed", url, None) for url in removed_urls)
 
     for event_type, url, old_title in candidates:
-        item = current[url]
+        item = previous[url] if event_type == "removed" else current[url]
         extra = item.get("sha256", "") if event_type == "pdf_changed" else (old_title or "")
         key = event_key(event_type, item, extra)
         if key in notified_set:
@@ -439,7 +515,7 @@ def main() -> int:
             continue
         send_item(item, event_type, old_title=old_title)
         archived_pdf = None
-        if item.get("pdf"):
+        if item.get("pdf") and event_type != "removed":
             try:
                 archived_pdf = archive_pdf(item)
             except Exception as exc:
